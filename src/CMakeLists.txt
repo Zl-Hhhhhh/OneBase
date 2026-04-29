@@ -35,8 +35,16 @@ find_package(Threads REQUIRED)
 add_executable(onebase_server onebase_server/server_main.cpp)
 target_link_libraries(onebase_server PRIVATE onebase_server_lib Threads::Threads)
 
+if(WIN32)
+  target_link_libraries(onebase_server PRIVATE ws2_32)
+endif()
+
 # Client executable
 add_executable(onebase_client
   onebase_client/client_main.cpp
 )
 target_link_libraries(onebase_client PRIVATE onebase_common)
+
+if(WIN32)
+  target_link_libraries(onebase_client PRIVATE ws2_32)
+endif()

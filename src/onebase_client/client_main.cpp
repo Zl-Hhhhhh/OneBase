@@ -1,7 +1,18 @@
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <iomanip>
@@ -11,6 +22,23 @@
 #include <vector>
 
 #include "onebase/server/protocol.h"
+
+#ifdef _WIN32
+using socket_t = SOCKET;
+constexpr socket_t kInvalidSocket = INVALID_SOCKET;
+static bool InitSockets() {
+  WSADATA wsa{};
+  return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+}
+static void CleanupSockets() { WSACleanup(); }
+static void CloseSocket(socket_t fd) { closesocket(fd); }
+#else
+using socket_t = int;
+constexpr socket_t kInvalidSocket = -1;
+static bool InitSockets() { return true; }
+static void CleanupSockets() {}
+static void CloseSocket(socket_t fd) { ::close(fd); }
+#endif
 
 // Pretty-print a result table received from the server.
 static void PrintResult(const std::string &body) {
@@ -98,6 +126,22 @@ auto main(int argc, char *argv[]) -> int {
   std::string host = "127.0.0.1";
   uint16_t port = onebase::DEFAULT_SERVER_PORT;
 
+#ifdef _WIN32
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "-H" && i + 1 < argc) {
+      host = argv[++i];
+    } else if (arg == "-p" && i + 1 < argc) {
+      port = static_cast<uint16_t>(std::stoi(argv[++i]));
+    } else if (arg == "-h") {
+      PrintUsage(argv[0]);
+      return 0;
+    } else {
+      PrintUsage(argv[0]);
+      return 1;
+    }
+  }
+#else
   int opt;
   while ((opt = getopt(argc, argv, "H:p:h")) != -1) {
     switch (opt) {
@@ -113,11 +157,18 @@ auto main(int argc, char *argv[]) -> int {
         return (opt == 'h') ? 0 : 1;
     }
   }
+#endif
+
+  if (!InitSockets()) {
+    std::cerr << "Failed to initialize sockets." << std::endl;
+    return 1;
+  }
 
   // Create TCP socket and connect
-  int sock_fd = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (sock_fd < 0) {
+  socket_t sock_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (sock_fd == kInvalidSocket) {
     perror("socket");
+    CleanupSockets();
     return 1;
   }
 
@@ -126,7 +177,8 @@ auto main(int argc, char *argv[]) -> int {
   server_addr.sin_port = htons(port);
   if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
     std::cerr << "Invalid address: " << host << std::endl;
-    ::close(sock_fd);
+    CloseSocket(sock_fd);
+    CleanupSockets();
     return 1;
   }
 
@@ -134,7 +186,8 @@ auto main(int argc, char *argv[]) -> int {
                 sizeof(server_addr)) < 0) {
     std::cerr << "Failed to connect to " << host << ":" << port << std::endl;
     perror("connect");
-    ::close(sock_fd);
+    CloseSocket(sock_fd);
+    CleanupSockets();
     return 1;
   }
 
@@ -227,7 +280,8 @@ auto main(int argc, char *argv[]) -> int {
     }
   }
 
-  ::close(sock_fd);
+  CloseSocket(sock_fd);
+  CleanupSockets();
   std::cout << "Disconnected." << std::endl;
   return 0;
 }

@@ -27,7 +27,7 @@ set(ONEBASE_CXX_FLAGS
     -fno-omit-frame-pointer
 )
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT WIN32)
     list(APPEND ONEBASE_CXX_FLAGS -fsanitize=address -fno-sanitize=leak -g -O0)
     add_link_options(-fsanitize=address -fno-sanitize=leak)
 endif()

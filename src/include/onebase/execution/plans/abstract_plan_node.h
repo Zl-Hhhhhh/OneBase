@@ -3,6 +3,12 @@
 #include <vector>
 #include "onebase/catalog/schema.h"
 
+#ifdef _WIN32
+#ifdef DELETE
+#undef DELETE
+#endif
+#endif
+
 namespace onebase {
 
 enum class PlanType {

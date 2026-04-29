@@ -1,8 +1,19 @@
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
+#include <signal.h>
 
 #include <atomic>
 #include <iostream>
@@ -19,14 +30,32 @@
 #include "onebase/storage/table/tuple.h"
 
 static std::atomic<bool> g_running{true};
-static int g_listen_fd = -1;
+
+#ifdef _WIN32
+using socket_t = SOCKET;
+constexpr socket_t kInvalidSocket = INVALID_SOCKET;
+static bool InitSockets() {
+  WSADATA wsa{};
+  return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+}
+static void CleanupSockets() { WSACleanup(); }
+static void CloseSocket(socket_t fd) { closesocket(fd); }
+#else
+using socket_t = int;
+constexpr socket_t kInvalidSocket = -1;
+static bool InitSockets() { return true; }
+static void CleanupSockets() {}
+static void CloseSocket(socket_t fd) { ::close(fd); }
+#endif
+
+static socket_t g_listen_fd = kInvalidSocket;
 
 static void SignalHandler(int /*sig*/) {
   g_running.store(false);
   // Unblock accept() by closing the listen socket
-  if (g_listen_fd >= 0) {
-    ::close(g_listen_fd);
-    g_listen_fd = -1;
+  if (g_listen_fd != kInvalidSocket) {
+    CloseSocket(g_listen_fd);
+    g_listen_fd = kInvalidSocket;
   }
 }
 
@@ -78,7 +107,7 @@ static void HandleQuery(onebase::OneBaseInstance &instance,
 
 // Handle a single client connection.
 static void HandleClient(onebase::OneBaseInstance &instance,
-                         int client_fd, const std::string &client_addr) {
+                         socket_t client_fd, const std::string &client_addr) {
   using namespace onebase;
   LOG_INFO("Client connected: {}", client_addr);
 
@@ -103,7 +132,7 @@ static void HandleClient(onebase::OneBaseInstance &instance,
 
 done:
   LOG_INFO("Client disconnected: {}", client_addr);
-  ::close(client_fd);
+  CloseSocket(client_fd);
 }
 
 static void PrintUsage(const char *prog) {
@@ -119,6 +148,22 @@ auto main(int argc, char *argv[]) -> int {
   std::string db_file = "onebase.db";
   uint16_t port = onebase::DEFAULT_SERVER_PORT;
 
+#ifdef _WIN32
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "-d" && i + 1 < argc) {
+      db_file = argv[++i];
+    } else if (arg == "-p" && i + 1 < argc) {
+      port = static_cast<uint16_t>(std::stoi(argv[++i]));
+    } else if (arg == "-h") {
+      PrintUsage(argv[0]);
+      return 0;
+    } else {
+      PrintUsage(argv[0]);
+      return 1;
+    }
+  }
+#else
   int opt;
   while ((opt = getopt(argc, argv, "d:p:h")) != -1) {
     switch (opt) {
@@ -134,11 +179,19 @@ auto main(int argc, char *argv[]) -> int {
         return (opt == 'h') ? 0 : 1;
     }
   }
+#endif
 
   // Install signal handlers for graceful shutdown
   signal(SIGINT, SignalHandler);
   signal(SIGTERM, SignalHandler);
+#ifndef _WIN32
   signal(SIGPIPE, SIG_IGN);  // ignore broken pipe
+#endif
+
+  if (!InitSockets()) {
+    std::cerr << "Failed to initialize sockets." << std::endl;
+    return 1;
+  }
 
   std::cout << "OneBase Server starting..." << std::endl;
   std::cout << "Database file: " << db_file << std::endl;
@@ -150,13 +203,20 @@ auto main(int argc, char *argv[]) -> int {
 
   // Create TCP listen socket
   g_listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (g_listen_fd < 0) {
+  if (g_listen_fd == kInvalidSocket) {
     perror("socket");
+    CleanupSockets();
     return 1;
   }
 
   int reuse = 1;
-  setsockopt(g_listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  setsockopt(g_listen_fd, SOL_SOCKET, SO_REUSEADDR,
+#ifdef _WIN32
+             reinterpret_cast<const char *>(&reuse),
+#else
+             &reuse,
+#endif
+             sizeof(reuse));
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
@@ -165,13 +225,15 @@ auto main(int argc, char *argv[]) -> int {
 
   if (::bind(g_listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
     perror("bind");
-    ::close(g_listen_fd);
+    CloseSocket(g_listen_fd);
+    CleanupSockets();
     return 1;
   }
 
   if (::listen(g_listen_fd, 16) < 0) {
     perror("listen");
-    ::close(g_listen_fd);
+    CloseSocket(g_listen_fd);
+    CleanupSockets();
     return 1;
   }
 
@@ -182,11 +244,15 @@ auto main(int argc, char *argv[]) -> int {
   std::vector<std::thread> workers;
   while (g_running.load()) {
     sockaddr_in client_addr{};
+#ifdef _WIN32
+    int client_len = sizeof(client_addr);
+#else
     socklen_t client_len = sizeof(client_addr);
-    int client_fd = ::accept(g_listen_fd,
-                             reinterpret_cast<sockaddr *>(&client_addr),
-                             &client_len);
-    if (client_fd < 0) {
+#endif
+    socket_t client_fd = ::accept(g_listen_fd,
+                                  reinterpret_cast<sockaddr *>(&client_addr),
+                                  &client_len);
+    if (client_fd == kInvalidSocket) {
       if (!g_running.load()) {
         break;  // shutdown requested
       }
@@ -209,9 +275,11 @@ auto main(int argc, char *argv[]) -> int {
     }
   }
 
-  if (g_listen_fd >= 0) {
-    ::close(g_listen_fd);
+  if (g_listen_fd != kInvalidSocket) {
+    CloseSocket(g_listen_fd);
   }
+
+  CleanupSockets();
 
   std::cout << "\nOneBase Server stopped." << std::endl;
   return 0;

@@ -12,7 +12,44 @@ NestedLoopJoinExecutor::NestedLoopJoinExecutor(ExecutorContext *exec_ctx,
 
 void NestedLoopJoinExecutor::Init() {
   // TODO(student): Initialize both child executors
-  throw NotImplementedException("NestedLoopJoinExecutor::Init");
+  result_tuples_.clear();
+  cursor_ = 0;
+
+  left_executor_->Init();
+  const auto &left_schema = left_executor_->GetOutputSchema();
+  const auto &right_schema = right_executor_->GetOutputSchema();
+
+  auto make_join_tuple = [&](const Tuple &left_tuple, const Tuple &right_tuple) {
+    std::vector<Value> values;
+    values.reserve(left_schema.GetColumnCount() + right_schema.GetColumnCount());
+    for (uint32_t i = 0; i < left_schema.GetColumnCount(); i++) {
+      values.push_back(left_tuple.GetValue(&left_schema, i));
+    }
+    for (uint32_t i = 0; i < right_schema.GetColumnCount(); i++) {
+      values.push_back(right_tuple.GetValue(&right_schema, i));
+    }
+    return Tuple(std::move(values));
+  };
+
+  Tuple left_tuple;
+  RID left_rid;
+  while (left_executor_->Next(&left_tuple, &left_rid)) {
+    right_executor_->Init();
+
+    Tuple right_tuple;
+    RID right_rid;
+    while (right_executor_->Next(&right_tuple, &right_rid)) {
+      bool match = true;
+      if (plan_->GetPredicate() != nullptr) {
+        match = plan_->GetPredicate()
+                    ->EvaluateJoin(&left_tuple, &left_schema, &right_tuple, &right_schema)
+                    .GetAsBoolean();
+      }
+      if (match) {
+        result_tuples_.push_back(make_join_tuple(left_tuple, right_tuple));
+      }
+    }
+  }
 }
 
 auto NestedLoopJoinExecutor::Next(Tuple *tuple, RID *rid) -> bool {
@@ -20,7 +57,12 @@ auto NestedLoopJoinExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   // - For each left tuple, scan all right tuples
   // - Evaluate predicate on (left, right) pairs
   // - Output matching combined tuples
-  throw NotImplementedException("NestedLoopJoinExecutor::Next");
+  if (cursor_ >= result_tuples_.size()) {
+    return false;
+  }
+  *tuple = result_tuples_[cursor_++];
+  *rid = RID();
+  return true;
 }
 
 }  // namespace onebase
