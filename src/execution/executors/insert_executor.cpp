@@ -35,6 +35,17 @@ auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     auto inserted_rid = table_info->table_->InsertTuple(child_tuple);
     if (inserted_rid.has_value()) {
       inserted++;
+      for (auto *index_info : GetExecutorContext()->GetCatalog()->GetTableIndexes(table_info->name_)) {
+        if (!index_info->SupportsPointLookup()) {
+          continue;
+        }
+        auto key_col = index_info->GetLookupAttr();
+        auto key_val = child_tuple.GetValue(&table_info->schema_, key_col);
+        if (key_val.IsNull() || key_val.GetTypeId() != TypeId::INTEGER) {
+          continue;
+        }
+        index_info->InsertEntry(key_val.GetAsInteger(), inserted_rid.value());
+      }
     }
   }
 

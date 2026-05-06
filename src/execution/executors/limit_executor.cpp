@@ -9,7 +9,6 @@ LimitExecutor::LimitExecutor(ExecutorContext *exec_ctx, const LimitPlanNode *pla
 
 void LimitExecutor::Init() {
   // TODO(student): Initialize child executor and reset count
-  throw NotImplementedException("LimitExecutor::Init");
   child_executor_->Init();
   count_ = 0;
 }

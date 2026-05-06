@@ -16,7 +16,6 @@ class IndexScanExecutor : public AbstractExecutor {
   const IndexScanPlanNode *plan_;
   TableInfo *table_info_{nullptr};
   IndexInfo *index_info_{nullptr};
-    std::vector<Tuple> result_tuples_;
   std::vector<RID> matching_rids_;
   size_t cursor_{0};
 };

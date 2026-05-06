@@ -41,6 +41,20 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     Tuple new_tuple(std::move(new_values));
     if (table_info->table_->UpdateTuple(old_rid, new_tuple)) {
       updated++;
+      for (auto *index_info : GetExecutorContext()->GetCatalog()->GetTableIndexes(table_info->name_)) {
+        if (!index_info->SupportsPointLookup()) {
+          continue;
+        }
+        auto key_col = index_info->GetLookupAttr();
+        auto old_key = old_tuple.GetValue(&table_info->schema_, key_col);
+        auto new_key = new_tuple.GetValue(&table_info->schema_, key_col);
+        if (old_key.IsNull() || new_key.IsNull() ||
+            old_key.GetTypeId() != TypeId::INTEGER || new_key.GetTypeId() != TypeId::INTEGER) {
+          continue;
+        }
+        index_info->RemoveEntry(old_key.GetAsInteger(), old_rid);
+        index_info->InsertEntry(new_key.GetAsInteger(), old_rid);
+      }
     }
   }
 

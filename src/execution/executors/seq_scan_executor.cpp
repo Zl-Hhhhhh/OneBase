@@ -39,7 +39,14 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       }
     }
 
-    *tuple = current;
+    const auto &output_schema = plan_->GetOutputSchema();
+    std::vector<Value> values;
+    values.reserve(output_schema.GetColumnCount());
+    for (uint32_t i = 0; i < output_schema.GetColumnCount(); ++i) {
+      values.push_back(current.GetValue(&table_info_->schema_, i));
+    }
+    *tuple = Tuple(std::move(values));
+    tuple->SetRID(current_rid);
     *rid = current_rid;
     return true;
   }

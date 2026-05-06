@@ -32,6 +32,17 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   Tuple child_tuple;
   RID child_rid;
   while (child_executor_->Next(&child_tuple, &child_rid)) {
+    for (auto *index_info : GetExecutorContext()->GetCatalog()->GetTableIndexes(table_info->name_)) {
+      if (!index_info->SupportsPointLookup()) {
+        continue;
+      }
+      auto key_col = index_info->GetLookupAttr();
+      auto key_val = child_tuple.GetValue(&table_info->schema_, key_col);
+      if (key_val.IsNull() || key_val.GetTypeId() != TypeId::INTEGER) {
+        continue;
+      }
+      index_info->RemoveEntry(key_val.GetAsInteger(), child_rid);
+    }
     table_info->table_->DeleteTuple(child_rid);
     deleted++;
   }
